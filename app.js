@@ -436,6 +436,12 @@
     resolve(c.ok, c.ok ? null : c.why, '');
   }
 
+  function trackActive() {
+    const s = session; if (!s) return;
+    S.active = s.mode === 'test'
+      ? { mode: 'test', lvl: s.lvl > 10 ? 10 : s.lvl, answered: s.n, correct: s.correct, started: s.start, at: Date.now() }
+      : { mode: s.mode, lvl: s.lvl, answered: s.results.length, of: s.plan.length, correct: s.results.filter((r) => r.first).length, started: s.start, at: Date.now() };
+  }
   function resolve(ok, why, note) {
     const s = session, q = s.q;
     s.tries++;
@@ -446,7 +452,7 @@
       stat(q.level, ok);
       if (s.c >= 3) { s.per.push({ lvl: s.lvl, c: s.c, w: s.w, pass: true }); s.lvl++; s.c = 0; s.w = 0; if (s.lvl > 10) { s.testOver = true; s.final = 10; } }
       else if (s.w >= 2) { s.per.push({ lvl: s.lvl, c: s.c, w: s.w, pass: false }); s.testOver = true; s.final = s.lvl - 1; }
-      save(); renderSession(); return;
+      trackActive(); save(); renderSession(); return;
     }
     if (ok) {
       const first = s.tries === 1;
@@ -455,14 +461,14 @@
       if (first && s.combo >= 3) pts = Math.round(pts * 1.5);
       s.points += pts; S.points += pts;
       s.results.push({ lvl: q.level, role: s.role, first, ok: true });
-      stat(q.level, first);
+      stat(q.level, first); trackActive();
       s.done = true; s.fb = { type: 'good', pts, note: note || (s.tries > 1 ? 'You fixed it. That is exactly how you learn this stuff.' : '') };
       save();
     } else if (s.tries === 1) {
       s.combo = 0; s.fb = { type: 'warn', why };
     } else {
       s.results.push({ lvl: q.level, role: s.role, first: false, ok: false });
-      stat(q.level, false);
+      stat(q.level, false); trackActive();
       s.done = true; s.fb = { type: 'bad', why };
       save();
     }
@@ -474,7 +480,7 @@
     if (box.innerHTML) { box.innerHTML = ''; return; }
     box.innerHTML = `<div class="confirm" style="margin-bottom:14px"><b>Stop now?</b><p class="small">${session.mode === 'test' ? "This test won't be saved. You can start it again any time." : 'Points you earned so far are kept, but the lesson will not count toward leveling up.'}</p>
       <div class="row"><button class="btn danger" id="quitYes">Stop</button><button class="btn ghost" id="quitNo">Keep going</button></div></div>`;
-    $('#quitYes').onclick = () => { session = null; render(); };
+    $('#quitYes').onclick = () => { session = null; if (S.active) { delete S.active; save(); } render(); };
     $('#quitNo').onclick = () => { box.innerHTML = ''; };
   }
 
@@ -501,7 +507,7 @@
   function finishTest() {
     const s = session, level = s.final;
     const rec = { date: Date.now(), level, correct: s.correct, total: s.n, secs: Math.round((Date.now() - s.start) / 1000), per: s.per };
-    S.tests.push(rec);
+    S.tests.push(rec); delete S.active;
     const target = Math.min(10, Math.max(1, level + 1));
     if (!S.placed) { S.level = target; S.placed = true; S.strong = 0; }
     else if (target > S.level) { S.level = target; S.strong = 0; }
@@ -552,7 +558,7 @@
     }
     S.points += bonus; s.points += bonus;
     const rec = { date: Date.now(), day: dayKey(), mode: s.mode, level: s.lvl, total: s.results.length, first: s.results.filter((r) => r.first).length, acc, points: s.points, secs: Math.round((Date.now() - s.start) / 1000) };
-    S.lessons.push(rec);
+    S.lessons.push(rec); delete S.active;
     save();
     s.result = { rec, msg, leveled, bonus };
     renderSession();
@@ -585,6 +591,20 @@
     const labels = tests.map((x, i) => (n <= 6 || i === 0 || i === n - 1) ? `<text x="${xs(i)}" y="${H - 6}" text-anchor="middle">${new Date(x.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</text>` : '').join('');
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Placement test level over time">${grid}${area}${n > 1 ? `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round"/>` : ''}${dots}${labels}</svg>`;
   }
+  function activeHTML() {
+    const a = S.active; if (!a) return '';
+    const live = Date.now() - a.at < 30 * 60000;
+    const what = a.mode === 'test' ? 'Placement test' : a.mode === 'lesson' ? 'Daily lesson' : 'Extra practice';
+    const where = `Level ${a.lvl}: ${lvlName(a.lvl)}`;
+    const count = a.mode === 'test' ? `${a.correct} of ${a.answered} right so far` : `${a.answered} of ${a.of} problems done, ${a.correct} right on the first try`;
+    const ago = Math.max(1, Math.round((Date.now() - a.at) / 60000));
+    const note = a.mode === 'test' ? 'The test result and lesson level are saved when the test ends.' : 'The lesson shows up below when she finishes.';
+    return live
+      ? `<section class="card stack" style="border:2px solid var(--accent);background:var(--accent-soft)"><span class="eyebrow" style="color:var(--accent)">In progress now</span>
+          <h3>${what}: on ${where}</h3><p>${count}. Last answer ${ago} min ago. ${note}</p></section>`
+      : `<section class="card stack"><span class="eyebrow">Unfinished</span><h3>${what} stopped on ${where}</h3>
+          <p class="muted">${count}, last answer ${fmtDate(a.at)}. It wasn't finished, so it doesn't count as a result.</p></section>`;
+  }
   function renderScores() {
     const T = S.tests, Ls = S.lessons.slice().reverse();
     const best = T.reduce((m, x) => Math.max(m, x.level), 0);
@@ -592,6 +612,7 @@
     const totalMin = Math.round(S.lessons.reduce((a, x) => a + x.secs, 0) / 60);
     shell(`<div class="stack">
       <h1 style="font-size:2rem">Scores</h1>
+      ${activeHTML()}
       <div class="kpis">
         <div class="kpi"><b>${S.points.toLocaleString()}</b><span>Total points</span></div>
         <div class="kpi"><b>${S.level}</b><span>Lesson level</span></div>
