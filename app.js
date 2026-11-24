@@ -24,7 +24,7 @@
   // ---------- state ----------
   const blank = () => ({
     v: 1, name: '', points: 0, level: 1, placed: false, strong: 0,
-    tests: [], lessons: [], streak: { count: 0, last: '' }, stats: {}, updated: 0
+    tests: [], lessons: [], misses: [], streak: { count: 0, last: '' }, stats: {}, updated: 0
   });
   let S = blank();
   let storageOK = true;
@@ -308,7 +308,7 @@
       if (s.i >= s.plan.length) return finishLesson();
       const p = s.plan[s.i]; s.q = generate(p.lvl, s.seen); s.role = p.role;
     }
-    s.tries = 0; s.input = ''; s.fb = null; s.done = false; s.wrongIdx = [];
+    s.tries = 0; s.input = ''; s.fb = null; s.done = false; s.wrongIdx = []; s.log = [];
     renderSession();
   }
 
@@ -427,12 +427,14 @@
       why = q.diag ? q.diag(p.v) : null;
       if (!why && q.ans !== 0 && Math.abs(p.v + q.ans) < 1e-9) why = 'So close! Your answer has the opposite sign. Recheck the signs at each step.';
     }
+    session.given = esc(s.input);
     resolve(ok, why, note);
   }
   function answerMC(i) {
     const s = session, q = s.q, c = q.choices[i];
     if (s.done || s.wrongIdx.includes(i)) return;
     if (!c.ok) s.wrongIdx.push(i);
+    s.given = c.h;
     resolve(c.ok, c.ok ? null : c.why, '');
   }
 
@@ -445,7 +447,14 @@
   function resolve(ok, why, note) {
     const s = session, q = s.q;
     s.tries++;
+    s.log.push({ a: s.given, ok, why: why || null });
+    const logMiss = (fixed) => {
+      if (!Array.isArray(S.misses)) S.misses = [];
+      S.misses.unshift({ at: Date.now(), mode: s.mode, lvl: q.level, skill: q.skill, lead: q.lead, expr: q.expr, tries: s.log, ans: q.ansH, hint: s.mode === 'test' ? null : q.hint, steps: q.steps, fixed });
+      if (S.misses.length > 60) S.misses.length = 60;
+    };
     if (s.mode === 'test') {
+      if (!ok) logMiss(false);
       s.done = true;
       if (ok) { s.c++; s.correct++; const pts = Math.round(basePts(q.level) / 2); s.points += pts; S.points += pts; s.fb = { type: 'test-good', pts, note }; }
       else { s.w++; s.fb = { type: 'test-bad' }; }
@@ -462,6 +471,7 @@
       s.points += pts; S.points += pts;
       s.results.push({ lvl: q.level, role: s.role, first, ok: true });
       stat(q.level, first); trackActive();
+      if (!first) logMiss(true);
       s.done = true; s.fb = { type: 'good', pts, note: note || (s.tries > 1 ? 'You fixed it. That is exactly how you learn this stuff.' : '') };
       save();
     } else if (s.tries === 1) {
@@ -469,6 +479,7 @@
     } else {
       s.results.push({ lvl: q.level, role: s.role, first: false, ok: false });
       stat(q.level, false); trackActive();
+      logMiss(false);
       s.done = true; s.fb = { type: 'bad', why };
       save();
     }
@@ -605,6 +616,24 @@
       : `<section class="card stack"><span class="eyebrow">Unfinished</span><h3>${what} stopped on ${where}</h3>
           <p class="muted">${count}, last answer ${fmtDate(a.at)}. It wasn't finished, so it doesn't count as a result.</p></section>`;
   }
+  function missesHTML() {
+    const M = (S.misses || []).slice(0, 40);
+    const rows = M.map((m) => {
+      const tag = m.mode === 'test' ? '<span class="chip review">Test</span>' : m.fixed ? '<span class="chip" style="background:var(--good-soft);color:var(--good)">Fixed on 2nd try</span>' : '<span class="chip" style="background:var(--bad-soft);color:var(--bad)">Missed twice</span>';
+      const tries = m.tries.map((t, i) => `<div class="try ${t.ok ? 'ok' : ''}"><b>${m.tries.length > 1 ? (i === 0 ? 'First try' : 'Second try') : 'Her answer'}:</b> <span class="m">${t.a || '–'}</span> ${t.ok ? '✓' : '✗'}${t.why ? `<div class="small">App said: ${t.why}</div>` : ''}</div>`).join('');
+      return `<details class="miss"><summary><span class="small muted">${fmtDate(m.at)}</span> ${tag} <span>Level ${m.lvl} · ${esc(m.skill)}</span></summary>
+        <div class="stack" style="gap:10px;padding-top:10px">
+          <p>${m.lead}</p>${m.expr ? `<div class="expr" style="font-size:1.5rem;padding:10px">${m.expr}</div>` : ''}
+          ${tries}
+          ${m.hint ? `<div class="small"><b>Hint she was shown:</b> ${m.hint}</div>` : ''}
+          <div><b>Correct answer:</b> <span class="m">${m.ans}</span></div>
+          <details><summary class="small">Step-by-step solution</summary><ol class="steps" style="margin-top:8px">${m.steps.map((x) => `<li>${x}</li>`).join('')}</ol></details>
+        </div></details>`;
+    }).join('');
+    return `<section class="card stack"><div><span class="eyebrow">Mistakes</span><h3 style="margin-top:4px">Questions she got wrong</h3>
+      <p class="small muted">Newest first. Tap one to see the question, her answers, what the app told her, and the solution. Tracking started Nov 23, 2026.</p></div>
+      ${M.length ? `<div class="misses">${rows}</div>` : '<div class="empty-note">No missed questions recorded yet.</div>'}</section>`;
+  }
   function renderScores() {
     const T = S.tests, Ls = S.lessons.slice().reverse();
     const best = T.reduce((m, x) => Math.max(m, x.level), 0);
@@ -633,6 +662,7 @@
             return `<div class="rung" style="grid-template-columns:34px 1fr 64px"><b>${L.n}</b><div style="display:grid;gap:4px;min-width:0"><span class="small">${L.name}</span><div class="meter" style="height:8px"><span style="width:${a}%;background:var(${a >= 80 ? '--good' : a >= 50 ? '--gold' : '--bad'})"></span></div></div><span class="small" style="text-align:right">${n ? a + '%' : '–'}</span></div>`; }).join('')}</div>
         </section>
       </div>
+      ${missesHTML()}
       <section class="card stack"><div><span class="eyebrow">Lessons</span><h3 style="margin-top:4px">Recent lessons and practice</h3></div>
         ${Ls.length ? `<div class="tablewrap"><table><thead><tr><th>Date</th><th>Type</th><th>Level</th><th>First try</th><th>Points</th><th>Time</th></tr></thead><tbody>
           ${Ls.slice(0, 40).map((x) => `<tr><td>${fmtDate(x.date)}</td><td>${x.mode === 'lesson' ? 'Lesson' : 'Practice'}</td><td>${x.level}</td><td>${x.first}/${x.total} (${pct(x.first, x.total)}%)</td><td>+${x.points}</td><td>${fmtMins(x.secs * 1000)}</td></tr>`).join('')}</tbody></table></div>`

@@ -307,3 +307,13 @@ textarea { min-height: 90px; font-family: ui-monospace, Menlo, monospace; font-s
 }
 .grid2 { align-items: start; }
 main > .wrap > .stack > .kpis .kpi { background: var(--card); border: 1px solid var(--line); }
+.misses { display: grid; gap: 8px; }
+.miss { background: var(--paper); border-radius: 14px; padding: 12px 14px; }
+.miss > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 600; list-style: none; }
+.miss > summary::-webkit-details-marker { display: none; }
+.miss > summary::after { content: "+"; margin-left: auto; font-size: 1.3rem; color: var(--accent); }
+.miss[open] > summary::after { content: "–"; }
+.miss .try { background: var(--bad-soft); border-radius: 10px; padding: 8px 12px; }
+.miss .try.ok { background: var(--good-soft); }
+.miss .m { font-family: var(--math); font-size: 1.15rem; }
+.miss summary.small { cursor: pointer; color: var(--accent); font-weight: 700; }
